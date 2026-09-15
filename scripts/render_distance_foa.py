@@ -9,6 +9,7 @@ import importlib.util
 import json
 import math
 import pickle
+from datetime import datetime
 from pathlib import Path
 
 import networkx as nx
@@ -92,22 +93,68 @@ def render_static(spatialize, source, ir, sr):
     return spatialize(padded, ir.T[:, None, :], np.array([0.0]), sr=sr)
 
 
+def choose_positions(positions, answer):
+    """Match displayed horizontal distances; never synthesize unavailable RIRs."""
+    if not answer.strip() or answer.strip().lower() == 'all':
+        return positions.copy()
+    tokens = answer.replace('，', ' ').replace(',', ' ').split()
+    if not tokens:
+        raise ValueError('Enter distances in meters, e.g. 1 3.')
+    selected = set()
+    for token in tokens:
+        try:
+            distance = float(token)
+        except ValueError:
+            raise ValueError(f'Invalid distance: {token}. Enter numbers in meters, e.g. 1 3.') from None
+        matches = [i for i, p in enumerate(positions)
+                   if math.isfinite(distance) and distance > 0
+                   and abs(p['horizontal_distance_m'] - distance) <= 0.000501]
+        if len(matches) != 1:
+            raise ValueError(f'No unique sample is available at {token} m. Choose from the distances listed above.')
+        selected.add(matches[0])
+    return [p for i, p in enumerate(positions) if i in selected]
+
+
+def create_run_directory(parent):
+    """Reserve the next run number for today's local date without overwriting."""
+    parent.mkdir(parents=True, exist_ok=True)
+    prefix = datetime.now().strftime('run-%m%d-')
+    numbers = [int(p.name[len(prefix):]) for p in parent.iterdir()
+               if p.name.startswith(prefix) and p.name[len(prefix):].isdigit()]
+    number = max(numbers, default=0) + 1
+    while True:
+        output = parent / f'{prefix}{number}'
+        try:
+            output.mkdir()
+            return output
+        except FileExistsError:
+            number += 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sources', type=Path, default=ROOT / 'dataset/source-test-0915')
     parser.add_argument('--dataset', type=Path, default=ROOT / 'dataset/soundspaces_1_0')
-    parser.add_argument('--output', type=Path, default=ROOT / 'outputs/distance_foa')
+    parser.add_argument('--output', type=Path,
+                        help='Custom output directory; default: outputs/run-MMDD-N relative to the project root')
     parser.add_argument('--scene', action='append', help='Repeat to choose scenes; default: all')
     parser.add_argument('--receiver', type=int, help='Fix a node ID instead of auto selection')
     parser.add_argument('--plan-only', action='store_true')
+    parser.add_argument('--distances', nargs='+', type=float,
+                        help='Horizontal distances in meters; omit to choose interactively')
+    parser.add_argument('--all-distances', action='store_true',
+                        help='Render every available distance without prompting')
     parser.add_argument('--rir-normalization', choices=['n3d', 'sn3d'], default='n3d',
                         help='Input ACN normalization; local RIR direct-path ratios indicate N3D')
     args = parser.parse_args()
+    if args.distances is not None and args.all_distances:
+        parser.error('--distances and --all-distances cannot be used together')
     sources = sorted(args.sources.rglob('*.wav'))
     if not sources:
         parser.error('No WAV source files found')
     # Never silently overwrite a previous experiment.
-    args.output.mkdir(parents=True, exist_ok=False)
+    if args.output is not None and args.output.exists():
+        parser.error(f'Output directory already exists. Use --output to specify a new directory: {args.output}')
     metadata = args.dataset / 'data/metadata/mp3d'
     scenes = args.scene or sorted(p.name for p in metadata.iterdir() if p.is_dir())
     report = {'output_format': 'FOA, ACN W,Y,Z,X, SN3D; float32 WAV',
@@ -140,10 +187,42 @@ def main():
                                        'distance_m': float(np.linalg.norm(delta)),
                                        'horizontal_distance_m': float(np.linalg.norm(delta[:2])),
                                        'rir': str(rir_dir / f'{receiver}_{s}.wav')})
+        available = entry['positions'].copy()
+        entry['available_positions'] = available
+        entry['max_horizontal_distance_m'] = max(p['horizontal_distance_m'] for p in available)
+        print(f'\nScene: {scene}, fixed receiver: {receiver}', flush=True)
+        print(f'Longest horizontal straight-line distance supported by the data: {entry["max_horizontal_distance_m"]:.3f} m'
+              ' (not the geometric maximum length of the room)', flush=True)
+        print('Available distances (m): ' + ', '.join(
+            f'{p["horizontal_distance_m"]:.3f}' for p in available), flush=True)
+        if args.distances is not None:
+            try:
+                entry['positions'] = choose_positions(available, ' '.join(map(str, args.distances)))
+            except ValueError as exc:
+                parser.error(f'{scene}: {exc}')
+        elif not args.all_distances:
+            while True:
+                try:
+                    answer = input('Which distances should be rendered? Enter e.g. 1 3 or 1,2,3; press Enter for all; q to quit: ')
+                    if answer.strip().lower() == 'q':
+                        print('Cancelled. No output generated.')
+                        return
+                    entry['positions'] = choose_positions(available, answer)
+                    break
+                except ValueError as exc:
+                    print(exc, flush=True)
+                except (EOFError, KeyboardInterrupt):
+                    print('\nCancelled. No output generated. For batch runs, use --distances or --all-distances.')
+                    return
+        print('Selected distances (m): ' + ', '.join(
+            f'{p["horizontal_distance_m"]:.3f}' for p in entry['positions']), flush=True)
         report['scenes'].append(entry)
         plans.append(entry)
-        print(f'{scene}: receiver={receiver}, sources={chain[1:]}, distances=' +
-              ', '.join(f'{p["distance_m"]:.3f}m' for p in entry['positions']), flush=True)
+    if args.output is None:
+        args.output = create_run_directory(ROOT / 'outputs')
+    else:
+        args.output.mkdir(parents=True, exist_ok=False)
+    print(f'Output directory: {args.output.resolve()}', flush=True)
     manifest = args.output / 'manifest.json'
     manifest.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
     if args.plan_only:

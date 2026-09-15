@@ -9,6 +9,18 @@ source repo/.venv/bin/activate
 python3 repo/scripts/render_distance_foa.py
 ```
 
+运行后会逐场景显示当前数据支持的最长水平直线距离，以及可生成的距离，并询问：
+
+```text
+Longest horizontal straight-line distance supported by the data: 3.000 m (not the geometric maximum length of the room)
+Available distances (m): 1.000, 2.000, 3.000
+Which distances should be rendered? Enter e.g. 1 3 or 1,2,3; press Enter for all; q to quit:
+```
+
+输入 `1 3` 只生成 1 米和 3 米，支持空格、英文或中文逗号分隔。回车或 `all` 选择全部。只能选择已有 RIR 的距离，不插值生成任意距离；无效输入会重新询问。所有场景选择完成后才创建输出目录，输入 `q` 或按 Ctrl+C 可在选择阶段取消。
+
+批量运行可用 `--distances 1 3` 指定距离，或 `--all-distances` 选择全部以跳过询问；这两个参数不能同时使用。指定距离会应用到每个选中的场景。`--plan-only` 同样支持上述交互和参数，仅保存选点结果。
+
 依赖：numpy、scipy、networkx，已安装版本固定在根目录 `requirements.txt`。重建环境时使用 Python 3.13：
 
 ```bash
@@ -22,20 +34,20 @@ python -m pip install -r requirements.txt
 
 - 声源默认：`dataset/source-test-0915`，递归读取 WAV。
 - RIR/坐标默认：`dataset/soundspaces_1_0`。
-- 输出默认：`outputs/distance_foa`；已有输出目录时拒绝覆盖。
+- 输出默认：项目内的 `outputs/run-MMDD-N`，例如 `outputs/run-0915-1`。日期使用本机当天日期，序号在当天已有最大序号上加 1。程序会打印完整输出路径；`--output` 可指定自定义目录，已有目录仍拒绝覆盖。
 - 每个声源的每个距离输出一份 4 通道、16 kHz、float32 WAV，附总表 `manifest.json`。
 - 立体声素材先对左右声道取平均，作为一个点声源；整段重采样到 RIR 采样率。
 
-再次生成请指定新目录：
+再次运行会自动创建当天的新序号目录，也可指定自定义目录：
 
 ```bash
-python3 repo/scripts/render_distance_foa.py --output outputs/distance_foa_run2
+python3 repo/scripts/render_distance_foa.py --output outputs/my_foa_run
 ```
 
 只查看选点，不渲染：
 
 ```bash
-python3 repo/scripts/render_distance_foa.py --plan-only --output outputs/distance_foa_plan2
+python3 repo/scripts/render_distance_foa.py --plan-only
 ```
 
 选择场景、麦克风节点或声源文件夹：
