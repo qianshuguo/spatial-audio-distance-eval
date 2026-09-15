@@ -1,0 +1,46 @@
+# macOS / Windows 文件管理器缓存
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Python / Conda 本地环境（依赖清单和锁文件保留）
+.conda-env/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Notebook 缓存、编辑器临时文件
+.ipynb_checkpoints/
+*.swp
+*.swo
+~$*
+
+# 本地环境变量（示例配置保留）
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# 模型测试目录仅保留在本地
+/model_testing/
+
+# 训练日志
+runs/
+wandb/
+events.out.tfevents.*
+*.log
+
+# 不全局忽略音频、.obj 或文档：保留源码仓库的测试样本和配置。
+# 新数据集按目录添加规则，以保留数据说明和校验记录。
