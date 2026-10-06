@@ -17,13 +17,14 @@ import numpy as np
 import scipy.signal  # SpatialScaper's single-IR branch accesses scipy.signal.
 from scipy.io import wavfile
 
-ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = REPO_ROOT.parent
 
 
 def load_spatialize():
     # Load the original implementation without importing Scaper's unrelated
     # SOFA/DCASE dependencies. No changes or copies of vendor code are required.
-    path = ROOT / 'repo/data_prep/SpatialScaper-main/spatialscaper/spatialize.py'
+    path = REPO_ROOT / 'third_party/spatialscaper/spatialscaper/spatialize.py'
     spec = importlib.util.spec_from_file_location('distance_spatialize', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -115,12 +116,64 @@ def choose_positions(positions, answer):
     return [p for i, p in enumerate(positions) if i in selected]
 
 
+def discover_source_projects(dataset_root):
+    """List first-level dataset projects that contain at least one WAV file."""
+    projects = []
+    for path in sorted((p for p in dataset_root.iterdir() if p.is_dir()),
+                       key=lambda p: p.name.lower()):
+        wav_count = sum(1 for _ in path.rglob('*.wav'))
+        if wav_count:
+            projects.append((path, wav_count))
+    return projects
+
+
+def choose_source_project(projects, answer):
+    """Select one displayed source project by its number or exact name."""
+    value = answer.strip()
+    if not value:
+        raise ValueError('Enter a project number or name.')
+    if value.isdigit():
+        index = int(value) - 1
+        if 0 <= index < len(projects):
+            return projects[index][0]
+    matches = [path for path, _ in projects if path.name == value]
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError('No such project. Choose one of the numbers or names listed above.')
+
+
+def choose_scenes(scenes, answer):
+    """Select displayed scenes by number or exact name; blank/all selects all."""
+    value = answer.strip()
+    if not value or value.lower() == 'all':
+        return scenes.copy()
+    tokens = value.replace('，', ' ').replace(',', ' ').split()
+    selected = []
+    for token in tokens:
+        if token.isdigit() and 1 <= int(token) <= len(scenes):
+            scene = scenes[int(token) - 1]
+        elif token in scenes:
+            scene = token
+        else:
+            raise ValueError(f'No such room: {token}. Choose from the numbers or names listed above.')
+        if scene not in selected:
+            selected.append(scene)
+    return selected
+
+
+def make_output_filename(source_path, position, receiver_id):
+    """Keep the original WAV stem visible in every rendered FOA filename."""
+    return (f'{source_path.stem}-d{position["distance_m"]:.3f}m_'
+            f'r{receiver_id}_s{position["source_id"]}_FOA.wav')
+
+
 def create_run_directory(parent):
     """Reserve the next run number for today's local date without overwriting."""
     parent.mkdir(parents=True, exist_ok=True)
-    prefix = datetime.now().strftime('run-%m%d-')
+    prefix = datetime.now().strftime('%y%m%d-run-')
     numbers = [int(p.name[len(prefix):]) for p in parent.iterdir()
-               if p.name.startswith(prefix) and p.name[len(prefix):].isdigit()]
+               if p.is_dir() and p.name.startswith(prefix)
+               and p.name[len(prefix):].isdigit()]
     number = max(numbers, default=0) + 1
     while True:
         output = parent / f'{prefix}{number}'
@@ -133,10 +186,12 @@ def create_run_directory(parent):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--sources', type=Path, default=ROOT / 'dataset/source-test-0915')
-    parser.add_argument('--dataset', type=Path, default=ROOT / 'dataset/soundspaces_1_0')
+    parser.add_argument('--sources', type=Path,
+                        help='WAV source folder; omit to choose a project from datasets/ interactively')
+    parser.add_argument('--dataset', type=Path,
+                        default=WORKSPACE_ROOT / 'datasets/soundspaces_1_0')
     parser.add_argument('--output', type=Path,
-                        help='Custom output directory; default: outputs/run-MMDD-N relative to the project root')
+                        help='Custom output directory; default: outputs/YYMMDD-run-N')
     parser.add_argument('--scene', action='append', help='Repeat to choose scenes; default: all')
     parser.add_argument('--receiver', type=int, help='Fix a node ID instead of auto selection')
     parser.add_argument('--plan-only', action='store_true')
@@ -149,6 +204,28 @@ def main():
     args = parser.parse_args()
     if args.distances is not None and args.all_distances:
         parser.error('--distances and --all-distances cannot be used together')
+    if args.sources is None:
+        source_root = WORKSPACE_ROOT / 'datasets'
+        projects = discover_source_projects(source_root)
+        if not projects:
+            parser.error(f'No dataset projects containing WAV files found in {source_root}')
+        print('Available source projects:', flush=True)
+        for index, (path, wav_count) in enumerate(projects, start=1):
+            print(f'  {index}. {path.name} ({wav_count} WAV files)', flush=True)
+        while True:
+            try:
+                answer = input('Which source project should be processed? Enter its number or name; q to quit: ')
+                if answer.strip().lower() == 'q':
+                    print('Cancelled. No output generated.')
+                    return
+                args.sources = choose_source_project(projects, answer)
+                break
+            except ValueError as exc:
+                print(exc, flush=True)
+            except (EOFError, KeyboardInterrupt):
+                print('\nCancelled. No output generated. For batch runs, use --sources.')
+                return
+        print(f'Selected source project: {args.sources.name}', flush=True)
     sources = sorted(args.sources.rglob('*.wav'))
     if not sources:
         parser.error('No WAV source files found')
@@ -156,7 +233,30 @@ def main():
     if args.output is not None and args.output.exists():
         parser.error(f'Output directory already exists. Use --output to specify a new directory: {args.output}')
     metadata = args.dataset / 'data/metadata/mp3d'
-    scenes = args.scene or sorted(p.name for p in metadata.iterdir() if p.is_dir())
+    available_scenes = sorted(p.name for p in metadata.iterdir() if p.is_dir())
+    if args.scene:
+        unknown_scenes = [scene for scene in args.scene if scene not in available_scenes]
+        if unknown_scenes:
+            parser.error('Unknown room(s): ' + ', '.join(unknown_scenes))
+        scenes = list(dict.fromkeys(args.scene))
+    else:
+        print('\nAvailable rooms/scenes:', flush=True)
+        for index, scene in enumerate(available_scenes, start=1):
+            print(f'  {index}. {scene}', flush=True)
+        while True:
+            try:
+                answer = input('Which rooms should be processed? Enter numbers or names; press Enter for all; q to quit: ')
+                if answer.strip().lower() == 'q':
+                    print('Cancelled. No output generated.')
+                    return
+                scenes = choose_scenes(available_scenes, answer)
+                break
+            except ValueError as exc:
+                print(exc, flush=True)
+            except (EOFError, KeyboardInterrupt):
+                print('\nCancelled. No output generated. For batch runs, use --scene.')
+                return
+        print('Selected rooms: ' + ', '.join(scenes), flush=True)
     report = {'output_format': 'FOA, ACN W,Y,Z,X, SN3D; float32 WAV',
               'input_convention': f'ACN/{args.rir_normalization.upper()}',
               'convention_evidence': 'Inferred from local axial direct-path channel ratios, not file metadata',
@@ -219,7 +319,7 @@ def main():
         report['scenes'].append(entry)
         plans.append(entry)
     if args.output is None:
-        args.output = create_run_directory(ROOT / 'outputs')
+        args.output = create_run_directory(WORKSPACE_ROOT / 'outputs')
     else:
         args.output.mkdir(parents=True, exist_ok=False)
     print(f'Output directory: {args.output.resolve()}', flush=True)
@@ -253,7 +353,7 @@ def main():
                 relative_source = source_path.relative_to(args.sources)
                 out_dir = scene_out / relative_source.parent / relative_source.stem
                 out_dir.mkdir(parents=True, exist_ok=True)
-                output = out_dir / f'd{position["distance_m"]:.3f}m_r{entry["receiver_id"]}_s{position["source_id"]}_FOA.wav'
+                output = out_dir / make_output_filename(source_path, position, entry['receiver_id'])
                 wavfile.write(output, sr, rendered.astype(np.float32))
                 entry['files'].append({'path': str(output), 'source': str(source_path),
                                        'source_id': position['source_id'], 'sample_rate': sr,

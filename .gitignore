@@ -33,9 +33,6 @@ htmlcov/
 !.env.sample
 !.env.template
 
-# 模型测试目录仅保留在本地
-/model_testing/
-
 # 训练日志
 runs/
 wandb/

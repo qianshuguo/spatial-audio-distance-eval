@@ -2,12 +2,37 @@
 
 ## 直接运行
 
-项目专用环境为 `repo/.venv`，提示名称为 `spatial-audio-distance`，使用 Python 3.13.5。在项目根目录激活并运行：
+项目专用环境为 `repo/.venv`，提示名称为 `spatial-audio-distance`，使用 Python 3.13.5。在外层工作区激活并运行：
 
 ```bash
 source repo/.venv/bin/activate
 python3 repo/scripts/render_distance_foa.py
 ```
+
+启动后会先列出外层工作区 `datasets/` 下所有包含 WAV 的一级项目，并询问要处理哪个文件夹：
+
+```text
+Available source projects:
+  1. RWCP (107 WAV files)
+  2. soundspaces_1_0 (5976 WAV files)
+  3. source-test-0915 (10 WAV files)
+  4. TinySOL (2913 WAV files)
+Which source project should be processed? Enter its number or name; q to quit:
+```
+
+输入编号或完整项目名选择一个项目；例如输入 `3` 或 `source-test-0915`。使用 `--sources` 时会跳过这一步。
+
+随后程序会列出全部房间/场景：
+
+```text
+Available rooms/scenes:
+  1. D7G3Y4RVNrH
+  2. GdvgFV5R1Z5
+  3. HxpKQynjfin
+Which rooms should be processed? Enter numbers or names; press Enter for all; q to quit:
+```
+
+输入 `1 2` 可同时选择前两个房间，也可以输入完整场景名；直接回车或输入 `all` 选择全部。使用一个或多个 `--scene` 参数时会跳过这一步。连接图为空等无法渲染的场景仍会显示，但处理时会明确跳过并记录原因。
 
 运行后会逐场景显示当前数据支持的最长水平直线距离，以及可生成的距离，并询问：
 
@@ -21,21 +46,21 @@ Which distances should be rendered? Enter e.g. 1 3 or 1,2,3; press Enter for all
 
 批量运行可用 `--distances 1 3` 指定距离，或 `--all-distances` 选择全部以跳过询问；这两个参数不能同时使用。指定距离会应用到每个选中的场景。`--plan-only` 同样支持上述交互和参数，仅保存选点结果。
 
-依赖：numpy、scipy、networkx，已安装版本固定在根目录 `requirements.txt`。重建环境时使用 Python 3.13：
+依赖：numpy、scipy、networkx、soundfile，版本固定在 `repo/requirements.txt`。重建环境时使用 Python 3.13：
 
 ```bash
 python3.13 -m venv --prompt spatial-audio-distance repo/.venv
 source repo/.venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -r repo/requirements.txt
 ```
 
 使用 `deactivate` 退出环境。
 脚本直接加载仓库里的 SpatialScaper `spatialize.py` 并调用 `spatialize()` 的静态单 RIR 卷积分支，无需安装完整的 SOFA/DCASE 依赖。
 
-- 声源默认：`dataset/source-test-0915`，递归读取 WAV。
-- RIR/坐标默认：`dataset/soundspaces_1_0`。
-- 输出默认：项目内的 `outputs/run-MMDD-N`，例如 `outputs/run-0915-1`。日期使用本机当天日期，序号在当天已有最大序号上加 1。程序会打印完整输出路径；`--output` 可指定自定义目录，已有目录仍拒绝覆盖。
-- 每个声源的每个距离输出一份 4 通道、16 kHz、float32 WAV，附总表 `manifest.json`。
+- 声源默认从外层 `datasets/` 的一级项目中交互选择，并递归读取所选项目中的 WAV；`--sources` 可直接指定文件夹并跳过询问。
+- RIR/坐标默认：`datasets/soundspaces_1_0`。
+- 输出默认：外层工作区的 `outputs/YYMMDD-run-N`，例如 `outputs/261005-run-1`。日期使用本机当天日期，序号在当天已有最大序号上加 1。程序会打印完整输出路径；`--output` 可指定自定义目录，已有目录仍拒绝覆盖。
+- 每个声源的每个距离输出一份 4 通道、16 kHz、float32 WAV。输出文件名以原始 WAV 名开头，例如源文件 `Alarm+8001_06.wav` 会生成 `Alarm+8001_06-d1.000m_r4_s6_FOA.wav`。目录结构保留源文件的相对目录和文件名，总表 `manifest.json` 还会记录完整的 `source` 路径。
 - 立体声素材先对左右声道取平均，作为一个点声源；整段重采样到 RIR 采样率。
 
 再次运行会自动创建当天的新序号目录，也可指定自定义目录：
@@ -50,10 +75,10 @@ python3 repo/scripts/render_distance_foa.py --output outputs/my_foa_run
 python3 repo/scripts/render_distance_foa.py --plan-only
 ```
 
-选择场景、麦克风节点或声源文件夹：
+通过命令行选择一个或多个场景、麦克风节点或声源文件夹：
 
 ```bash
-python3 repo/scripts/render_distance_foa.py --scene GdvgFV5R1Z5 --receiver 4 --sources dataset/source-test-0915 --output outputs/my_foa
+python3 repo/scripts/render_distance_foa.py --scene D7G3Y4RVNrH --scene GdvgFV5R1Z5 --receiver 4 --sources datasets/source-test-0915 --output outputs/my_foa
 ```
 
 ## 本次选点
